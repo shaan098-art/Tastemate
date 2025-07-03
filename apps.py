@@ -354,10 +354,14 @@ with tabs[4]:
         pipe.fit(X_train_r, y_train_r)
         y_pred = pipe.predict(X_test_r)
         trained_r[name] = pipe
+      rmse_val = mean_squared_error(y_test_r, y_pred, squared=False)
+    except TypeError:
+        # Old scikit-learn (<0.22) path – manually take the square root
+        rmse_val = np.sqrt(mean_squared_error(y_test_r, y_pred))
         reg_results.append({
             "Model": name,
             "R2": r2_score(y_test_r, y_pred),
-            "RMSE": mean_squared_error(y_test_r, y_pred, squared=False)
+            "RMSE": rmse_val
         })
     reg_df = pd.DataFrame(reg_results).round(3)
     st.subheader("Regression Performance")
