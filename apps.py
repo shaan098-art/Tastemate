@@ -1,8 +1,8 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # apps.py – Streamlit dashboard for Cloud-Kitchen consumer data
-# All five tabs in one file – ready for Streamlit Cloud
+# All five tabs in a single file – deploy directly on Streamlit Cloud
 # ──────────────────────────────────────────────────────────────────────────────
-import io                         # <— needed by load_data()
+import io
 import base64
 import numpy as np
 import pandas as pd
@@ -28,12 +28,11 @@ from mlxtend.frequent_patterns import apriori, association_rules
 st.set_page_config(page_title="Cloud Kitchen Analytics", layout="wide")
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Utilities
+# Helper functions
 # ═════════════════════════════════════════════════════════════════════════════
 @st.cache_data
-def load_data(path):
-    """Read CSV from a GitHub raw link or uploaded buffer."""
-    return pd.read_csv(path)
+def load_data(csv_path):
+    return pd.read_csv(csv_path)
 
 def download_link(df, filename, text):
     csv = df.to_csv(index=False)
@@ -41,16 +40,16 @@ def download_link(df, filename, text):
     return f'<a href="data:file/csv;base64,{b64}" download="{filename}">{text}</a>'
 
 def dense_onehot():
-    """Return OneHotEncoder that always outputs dense arrays — API-safe."""
-    try:                                     # sklearn ≥1.2
+    """Return OneHotEncoder that always outputs dense arrays, no matter the version."""
+    try:        # scikit-learn ≥1.2
         return OneHotEncoder(handle_unknown="ignore", sparse_output=False)
-    except TypeError:                        # sklearn ≤1.1
+    except TypeError:                 # scikit-learn ≤1.1
         return OneHotEncoder(handle_unknown="ignore", sparse=False)
 
 def prep_features(df, target, drop_multiselect=True):
     X = df.copy()
     y = X.pop(target)
-    if target == "subscribe_intent":            # binarise for classification
+    if target == "subscribe_intent":          # binarise for classification
         y = (y >= 4).astype(int)
 
     if drop_multiselect:
@@ -68,22 +67,22 @@ def prep_features(df, target, drop_multiselect=True):
     return X, y, pre
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Sidebar – choose data source
+# Sidebar – data source
 # ═════════════════════════════════════════════════════════════════════════════
 st.sidebar.header("Dataset")
 src = st.sidebar.radio("Data source", ["GitHub raw CSV", "Upload CSV"])
 
 if src == "GitHub raw CSV":
-    default = ("https://raw.githubusercontent.com/<USERNAME>/<REPO>"
-               "/main/cloud_kitchen_survey_synthetic.csv")
-    url = st.sidebar.text_input("Raw CSV URL", value=default)
+    default_url = ("https://raw.githubusercontent.com/<USERNAME>/<REPO>"
+                   "/main/cloud_kitchen_survey_synthetic.csv")
+    url = st.sidebar.text_input("Raw CSV URL", value=default_url)
     df = load_data(url) if url else None
 else:
     up = st.sidebar.file_uploader("Upload CSV", type="csv")
     df = pd.read_csv(up) if up is not None else None
 
 if df is None:
-    st.info("⬅️  Provide a CSV via GitHub raw link or upload one to begin.")
+    st.info("⬅️  Provide a CSV via link or upload to begin.")
     st.stop()
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -107,7 +106,7 @@ with tab1:
         "Orders per week distribution", "Spice preference counts",
         "Pause likelihood by distance", "NPS distribution"
     ]
-    show = st.multiselect("Choose charts", charts, default=charts)
+    show = st.multiselect("Choose insights", charts, default=charts)
 
     if "Age distribution" in show:
         fig, ax = plt.subplots()
@@ -167,7 +166,6 @@ with tab2:
     st.header("Predict Subscriber Intent")
 
     X, y, pre = prep_features(df, "subscribe_intent")
-
     split = st.slider("Test set size", 0.1, 0.4, 0.3, 0.05)
     Xtr, Xte, ytr, yte = train_test_split(
         X, y, test_size=split, random_state=42, stratify=y)
@@ -179,8 +177,9 @@ with tab2:
         "GBRT": GradientBoostingClassifier(random_state=42)
     }
 
-    # ── Train, predict, score ─────────
     results, trained = [], {}
+    y_true = np.asarray(yte).ravel().astype(int)   # ensure clean 1-D int array
+
     for name, mdl in models.items():
         pipe = Pipeline([("prep", pre), ("clf", mdl)])
         pipe.fit(Xtr, ytr)
@@ -188,23 +187,23 @@ with tab2:
         y_pred = np.asarray(pipe.predict(Xte)).ravel().astype(int)
         y_prob = (pipe.predict_proba(Xte)[:, 1]
                   if hasattr(mdl, "predict_proba") else None)
+
         trained[name] = {"pipe": pipe, "y_pred": y_pred, "y_prob": y_prob}
 
         results.append({
             "Algorithm": name,
-            "Accuracy":  accuracy_score(yte, y_pred).round(3),
-            "Precision": precision_score(yte, y_pred).round(3),
-            "Recall":    recall_score(yte, y_pred).round(3),
-            "F1":        f1_score(yte, y_pred).round(3)
+            "Accuracy":  accuracy_score(y_true, y_pred).round(3),
+            "Precision": precision_score(y_true, y_pred).round(3),
+            "Recall":    recall_score(y_true, y_pred).round(3),
+            "F1":        f1_score(y_true, y_pred).round(3)
         })
 
     st.subheader("Performance Summary")
     st.dataframe(pd.DataFrame(results))
 
-    # Confusion matrix
     algo_cm = st.selectbox("Algorithm for confusion matrix", list(models))
     if st.checkbox("Show confusion matrix"):
-        cm = confusion_matrix(yte, trained[algo_cm]["y_pred"])
+        cm = confusion_matrix(y_true, trained[algo_cm]["y_pred"])
         fig, ax = plt.subplots()
         sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
                     xticklabels=["Not-Likely", "Likely"],
@@ -212,25 +211,23 @@ with tab2:
         ax.set_xlabel("Predicted"); ax.set_ylabel("True")
         st.pyplot(fig)
 
-    # ROC curves
     st.subheader("ROC Curves")
     fig, ax = plt.subplots()
     for name, t in trained.items():
         if t["y_prob"] is not None:
-            fpr, tpr, _ = roc_curve(yte, t["y_prob"])
+            fpr, tpr, _ = roc_curve(y_true, t["y_prob"])
             ax.plot(fpr, tpr, label=f"{name} (AUC={auc(fpr,tpr):.2f})")
     ax.plot([0, 1], [0, 1], "--", color="gray")
     ax.set_xlabel("FPR"); ax.set_ylabel("TPR"); ax.legend()
     st.pyplot(fig)
 
-    # Predict on new data
     st.subheader("Upload new CSV to predict")
     new_csv = st.file_uploader("CSV without target column", type="csv")
     if new_csv is not None:
         new_df = pd.read_csv(new_csv)
         mdl_choice = st.selectbox("Model", list(models), key="pred_model")
-        pred_pipe = trained[mdl_choice]["pipe"]
-        preds = pred_pipe.predict(new_df)
+        pipe = trained[mdl_choice]["pipe"]
+        preds = pipe.predict(new_df)
         out = new_df.copy()
         out["predicted_subscriber"] = preds
         st.dataframe(out.head())
@@ -307,7 +304,8 @@ with tab4:
 with tab5:
     st.header("Budget Prediction (Regression)")
 
-    target = st.selectbox("Target variable", ["avg_spend_aed", "max_budget_aed"])
+    target = st.selectbox("Target numeric variable",
+                          ["avg_spend_aed", "max_budget_aed"])
     Xr, yr, pre_r = prep_features(df, target)
 
     Xtr, Xte, ytr, yte = train_test_split(
@@ -327,7 +325,6 @@ with tab5:
         y_pred = pipe.predict(Xte)
         trained_r[name] = pipe
 
-        # RMSE compatible with any sklearn version
         try:
             rmse = mean_squared_error(yte, y_pred, squared=False)
         except TypeError:
@@ -342,7 +339,6 @@ with tab5:
     st.subheader("Regression performance")
     st.dataframe(pd.DataFrame(reg_results))
 
-    # residual plot
     mdl_plot = st.selectbox("Model for residual plot", list(regs))
     preds = trained_r[mdl_plot].predict(Xr)
     fig, ax = plt.subplots()
