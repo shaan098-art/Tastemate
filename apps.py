@@ -1,11 +1,12 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# apps.py  –  Streamlit dashboard for Cloud-Kitchen consumer data
-# Fully self-contained, ready for Streamlit Cloud
+# apps.py – Streamlit dashboard for Cloud-Kitchen consumer data
+# All five tabs in one file – ready for Streamlit Cloud
 # ──────────────────────────────────────────────────────────────────────────────
-
-import streamlit as st
-import pandas as pd
+import io                         # <— needed by load_data()
+import base64
 import numpy as np
+import pandas as pd
+import streamlit as st
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
@@ -23,164 +24,153 @@ from sklearn.cluster import KMeans
 import matplotlib.pyplot as plt
 import seaborn as sns
 from mlxtend.frequent_patterns import apriori, association_rules
-import base64
 
-# ──────────────────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Cloud Kitchen Analytics", layout="wide")
 
-# -----------------------------------------------------------------------------#
+# ═════════════════════════════════════════════════════════════════════════════
 # Utilities
-# -----------------------------------------------------------------------------#
+# ═════════════════════════════════════════════════════════════════════════════
 @st.cache_data
-def load_data(url_or_bytes):
-    """Read CSV from GitHub raw link OR from BytesIO upload."""
-    if isinstance(url_or_bytes, bytes):
-        return pd.read_csv(io.BytesIO(url_or_bytes))
-    return pd.read_csv(url_or_bytes)
+def load_data(path):
+    """Read CSV from a GitHub raw link or uploaded buffer."""
+    return pd.read_csv(path)
 
-def download_link(df, filename, link_text):
-    """Create a download-as-CSV link."""
+def download_link(df, filename, text):
     csv = df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
-    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">{link_text}</a>'
+    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">{text}</a>'
 
 def dense_onehot():
-    """Return an OneHotEncoder that *always* outputs dense arrays.
-
-    scikit-learn <=1.1 :  parameter is `sparse`
-    scikit-learn >=1.2 :  parameter is `sparse_output`
-    """
-    try:
+    """Return OneHotEncoder that always outputs dense arrays — API-safe."""
+    try:                                     # sklearn ≥1.2
         return OneHotEncoder(handle_unknown="ignore", sparse_output=False)
-    except TypeError:                          # old API
+    except TypeError:                        # sklearn ≤1.1
         return OneHotEncoder(handle_unknown="ignore", sparse=False)
 
 def prep_features(df, target, drop_multiselect=True):
     X = df.copy()
     y = X.pop(target)
-
-    # turn multi-class subscribe_intent (1-5) into binary {0,1}
-    if target == "subscribe_intent":
+    if target == "subscribe_intent":            # binarise for classification
         y = (y >= 4).astype(int)
 
     if drop_multiselect:
-        multi_cols = [c for c in X.columns
-                      if X[c].dtype == object and X[c].str.contains(",").any()]
-        X = X.drop(columns=multi_cols)
+        ms_cols = [c for c in X.columns
+                   if X[c].dtype == object and X[c].str.contains(",").any()]
+        X = X.drop(columns=ms_cols)
 
     num_cols = X.select_dtypes(include=["int64", "float64"]).columns.tolist()
     cat_cols = [c for c in X.columns if c not in num_cols]
 
     pre = ColumnTransformer([
         ("num", StandardScaler(), num_cols),
-        ("cat", dense_onehot(), cat_cols)
+        ("cat", dense_onehot(),   cat_cols)
     ])
-
     return X, y, pre
 
-# -----------------------------------------------------------------------------#
+# ═════════════════════════════════════════════════════════════════════════════
 # Sidebar – choose data source
-# -----------------------------------------------------------------------------#
+# ═════════════════════════════════════════════════════════════════════════════
 st.sidebar.header("Dataset")
-data_choice = st.sidebar.radio("Data source",
-                               ["GitHub raw CSV", "Upload CSV"])
-if data_choice == "GitHub raw CSV":
-    default = "https://raw.githubusercontent.com/<USERNAME>/<REPO>/main/cloud_kitchen_survey_synthetic.csv"
-    data_url = st.sidebar.text_input("GitHub raw URL to CSV", value=default)
-    df = load_data(data_url) if data_url else None
+src = st.sidebar.radio("Data source", ["GitHub raw CSV", "Upload CSV"])
+
+if src == "GitHub raw CSV":
+    default = ("https://raw.githubusercontent.com/<USERNAME>/<REPO>"
+               "/main/cloud_kitchen_survey_synthetic.csv")
+    url = st.sidebar.text_input("Raw CSV URL", value=default)
+    df = load_data(url) if url else None
 else:
-    up = st.sidebar.file_uploader("Upload CSV", type=["csv"])
+    up = st.sidebar.file_uploader("Upload CSV", type="csv")
     df = pd.read_csv(up) if up is not None else None
 
 if df is None:
     st.info("⬅️  Provide a CSV via GitHub raw link or upload one to begin.")
     st.stop()
 
-# -----------------------------------------------------------------------------#
+# ═════════════════════════════════════════════════════════════════════════════
 # Tabs
-# -----------------------------------------------------------------------------#
+# ═════════════════════════════════════════════════════════════════════════════
 tab1, tab2, tab3, tab4, tab5 = st.tabs(
     ["Data Visualisation", "Classification", "Clustering",
      "Association Rules", "Regression"])
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # TAB 1 – Visualisation
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 with tab1:
     st.header("Exploratory Insights")
     st.dataframe(df.head())
 
-    vis_opts = [
+    charts = [
         "Age distribution", "Diet style counts",
         "Subscribe intent by fitness goal", "Average spend by income bracket",
         "Workout vs Subscribe intent scatter", "Heatmap of correlations",
         "Orders per week distribution", "Spice preference counts",
         "Pause likelihood by distance", "NPS distribution"
     ]
-    sel = st.multiselect("Choose charts to display", vis_opts, default=vis_opts)
+    show = st.multiselect("Choose charts", charts, default=charts)
 
-    if "Age distribution" in sel:
+    if "Age distribution" in show:
         fig, ax = plt.subplots()
         sns.countplot(x="age_group", data=df, ax=ax)
         st.pyplot(fig)
 
-    if "Diet style counts" in sel:
+    if "Diet style counts" in show:
         fig, ax = plt.subplots()
         sns.countplot(x="diet_style", data=df, ax=ax)
         st.pyplot(fig)
 
-    if "Subscribe intent by fitness goal" in sel:
+    if "Subscribe intent by fitness goal" in show:
         fig, ax = plt.subplots()
         sns.boxplot(x="fitness_goal", y="subscribe_intent", data=df, ax=ax)
         st.pyplot(fig)
 
-    if "Average spend by income bracket" in sel:
+    if "Average spend by income bracket" in show:
         fig, ax = plt.subplots()
         sns.barplot(x="income_bracket_aed", y="avg_spend_aed", data=df, ax=ax)
         st.pyplot(fig)
 
-    if "Workout vs Subscribe intent scatter" in sel:
+    if "Workout vs Subscribe intent scatter" in show:
         fig, ax = plt.subplots()
         sns.scatterplot(x="workouts_per_week", y="subscribe_intent",
                         hue="fitness_goal", data=df, ax=ax)
         st.pyplot(fig)
 
-    if "Heatmap of correlations" in sel:
+    if "Heatmap of correlations" in show:
         fig, ax = plt.subplots(figsize=(10, 6))
         sns.heatmap(df.select_dtypes("number").corr(), cmap="coolwarm", ax=ax)
         st.pyplot(fig)
 
-    if "Orders per week distribution" in sel:
+    if "Orders per week distribution" in show:
         fig, ax = plt.subplots()
         sns.histplot(df["orders_per_week"], bins=20, kde=True, ax=ax)
         st.pyplot(fig)
 
-    if "Spice preference counts" in sel:
+    if "Spice preference counts" in show:
         fig, ax = plt.subplots()
         sns.countplot(x="spice_level", data=df, ax=ax)
         st.pyplot(fig)
 
-    if "Pause likelihood by distance" in sel:
+    if "Pause likelihood by distance" in show:
         fig, ax = plt.subplots()
         sns.boxplot(x="distance_km", y="pause_likelihood", data=df, ax=ax)
         st.pyplot(fig)
 
-    if "NPS distribution" in sel:
+    if "NPS distribution" in show:
         fig, ax = plt.subplots()
         sns.histplot(df["nps_intent"], bins=11, ax=ax)
         st.pyplot(fig)
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # TAB 2 – Classification
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 with tab2:
     st.header("Predict Subscriber Intent")
 
     X, y, pre = prep_features(df, "subscribe_intent")
 
-    test_size = st.slider("Test size fraction", 0.1, 0.4, 0.3, 0.05)
+    split = st.slider("Test set size", 0.1, 0.4, 0.3, 0.05)
     Xtr, Xte, ytr, yte = train_test_split(
-        X, y, test_size=test_size, random_state=42, stratify=y)
+        X, y, test_size=split, random_state=42, stratify=y)
 
     models = {
         "KNN": KNeighborsClassifier(),
@@ -189,33 +179,32 @@ with tab2:
         "GBRT": GradientBoostingClassifier(random_state=42)
     }
 
+    # ── Train, predict, score ─────────
     results, trained = [], {}
-    for name, model in models.items():
-        pipe = Pipeline([("prep", pre), ("clf", model)])
+    for name, mdl in models.items():
+        pipe = Pipeline([("prep", pre), ("clf", mdl)])
         pipe.fit(Xtr, ytr)
-        y_pred = pipe.predict(Xte)
-        # some models may not have predict_proba under very old sklearn
+
+        y_pred = np.asarray(pipe.predict(Xte)).ravel().astype(int)
         y_prob = (pipe.predict_proba(Xte)[:, 1]
-                  if hasattr(pipe.named_steps["clf"], "predict_proba")
-                  else None)
-        trained[name] = (pipe, y_pred, y_prob)
+                  if hasattr(mdl, "predict_proba") else None)
+        trained[name] = {"pipe": pipe, "y_pred": y_pred, "y_prob": y_prob}
 
         results.append({
             "Algorithm": name,
-            "Accuracy": accuracy_score(yte, y_pred).round(3),
+            "Accuracy":  accuracy_score(yte, y_pred).round(3),
             "Precision": precision_score(yte, y_pred).round(3),
-            "Recall": recall_score(yte, y_pred).round(3),
-            "F1": f1_score(yte, y_pred).round(3)
+            "Recall":    recall_score(yte, y_pred).round(3),
+            "F1":        f1_score(yte, y_pred).round(3)
         })
 
     st.subheader("Performance Summary")
     st.dataframe(pd.DataFrame(results))
 
-    # Confusion matrix toggle
-    algo_cm = st.selectbox("Choose algorithm for confusion matrix", list(models))
+    # Confusion matrix
+    algo_cm = st.selectbox("Algorithm for confusion matrix", list(models))
     if st.checkbox("Show confusion matrix"):
-        _, y_pred_cm, _ = trained[algo_cm]
-        cm = confusion_matrix(yte, y_pred_cm)
+        cm = confusion_matrix(yte, trained[algo_cm]["y_pred"])
         fig, ax = plt.subplots()
         sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
                     xticklabels=["Not-Likely", "Likely"],
@@ -226,50 +215,49 @@ with tab2:
     # ROC curves
     st.subheader("ROC Curves")
     fig, ax = plt.subplots()
-    for name, (_, _, y_prob) in trained.items():
-        if y_prob is not None:
-            fpr, tpr, _ = roc_curve(yte, y_prob)
-            ax.plot(fpr, tpr, label=f"{name} (AUC={auc(fpr, tpr):.2f})")
+    for name, t in trained.items():
+        if t["y_prob"] is not None:
+            fpr, tpr, _ = roc_curve(yte, t["y_prob"])
+            ax.plot(fpr, tpr, label=f"{name} (AUC={auc(fpr,tpr):.2f})")
     ax.plot([0, 1], [0, 1], "--", color="gray")
     ax.set_xlabel("FPR"); ax.set_ylabel("TPR"); ax.legend()
     st.pyplot(fig)
 
     # Predict on new data
-    st.subheader("Upload new CSV (without target) for prediction")
-    new_csv = st.file_uploader("Upload CSV", type="csv", key="pred_csv")
+    st.subheader("Upload new CSV to predict")
+    new_csv = st.file_uploader("CSV without target column", type="csv")
     if new_csv is not None:
         new_df = pd.read_csv(new_csv)
-        model_choice = st.selectbox("Model", list(models), key="pred_model")
-        pred_pipe = trained[model_choice][0]
-        new_preds = pred_pipe.predict(new_df)
+        mdl_choice = st.selectbox("Model", list(models), key="pred_model")
+        pred_pipe = trained[mdl_choice]["pipe"]
+        preds = pred_pipe.predict(new_df)
         out = new_df.copy()
-        out["predicted_subscriber"] = new_preds
+        out["predicted_subscriber"] = preds
         st.dataframe(out.head())
         st.markdown(download_link(out, "predictions.csv", "📥 Download predictions"),
                     unsafe_allow_html=True)
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # TAB 3 – Clustering
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 with tab3:
     st.header("Customer Segmentation (K-Means)")
 
     num_df = df.select_dtypes("number")
     scaled = StandardScaler().fit_transform(num_df)
 
-    # Elbow
-    inertias = [KMeans(n_clusters=k, random_state=42, n_init="auto").fit(scaled).inertia_
+    inertias = [KMeans(k, n_init="auto", random_state=42).fit(scaled).inertia_
                 for k in range(2, 11)]
     fig, ax = plt.subplots()
     ax.plot(range(2, 11), inertias, marker="o")
     ax.set_xlabel("k"); ax.set_ylabel("Inertia"); ax.set_title("Elbow chart")
     st.pyplot(fig)
 
-    k = st.slider("Choose number of clusters", 2, 10, 3)
-    km = KMeans(n_clusters=k, random_state=42, n_init="auto").fit(scaled)
+    k = st.slider("Number of clusters", 2, 10, 3)
+    km = KMeans(k, n_init="auto", random_state=42).fit(scaled)
     df["cluster"] = km.labels_
 
-    st.subheader("Cluster persona table")
+    st.subheader("Cluster personas")
     persona = df.groupby("cluster").agg({
         "age_group": "median",
         "orders_per_week": "mean",
@@ -284,54 +272,48 @@ with tab3:
         "workouts_per_week": "Avg Workouts/Wk"
     })
     st.dataframe(persona)
-
     st.markdown(download_link(df, "clustered_data.csv",
                               "📥 Download data with clusters"),
                 unsafe_allow_html=True)
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # TAB 4 – Association Rules
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 with tab4:
     st.header("Association Rule Mining (Apriori)")
 
     multi_cols = [c for c in df.columns
                   if df[c].dtype == object and df[c].str.contains(",").any()]
-    chosen_cols = st.multiselect("Multi-select columns to mine",
-                                 multi_cols, default=multi_cols[:2])
-
+    choose = st.multiselect("Columns to mine", multi_cols, default=multi_cols[:2])
     min_sup = st.slider("Min support", 0.01, 0.5, 0.05, 0.01)
     min_conf = st.slider("Min confidence", 0.1, 1.0, 0.3, 0.05)
 
-    if chosen_cols:
+    if choose:
         basket = pd.DataFrame()
-        for col in chosen_cols:
-            onehot = df[col].str.get_dummies(sep=",").add_prefix(f"{col}_")
-            basket = pd.concat([basket, onehot], axis=1)
+        for col in choose:
+            dummies = df[col].str.get_dummies(sep=",").add_prefix(f"{col}_")
+            basket = pd.concat([basket, dummies], axis=1)
 
         freq = apriori(basket.astype(bool), min_support=min_sup,
                        use_colnames=True)
-        rules = association_rules(freq, metric="confidence",
-                                  min_threshold=min_conf)
-        st.subheader("Top 10 rules by confidence")
-        st.dataframe(rules.sort_values("confidence", ascending=False)
-                          .head(10)[["antecedents", "consequents",
-                                     "support", "confidence", "lift"]])
+        rules = association_rules(freq, "confidence", min_conf)
+        top10 = rules.sort_values("confidence", ascending=False).head(10)
+        st.dataframe(top10[["antecedents", "consequents",
+                            "support", "confidence", "lift"]])
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # TAB 5 – Regression
-# ──────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 with tab5:
     st.header("Budget Prediction (Regression)")
 
-    target_reg = st.selectbox("Target numeric variable",
-                              ["avg_spend_aed", "max_budget_aed"])
-    Xr, yr, pre_r = prep_features(df, target_reg)
+    target = st.selectbox("Target variable", ["avg_spend_aed", "max_budget_aed"])
+    Xr, yr, pre_r = prep_features(df, target)
 
-    Xtr_r, Xte_r, ytr_r, yte_r = train_test_split(
+    Xtr, Xte, ytr, yte = train_test_split(
         Xr, yr, test_size=0.3, random_state=42)
 
-    reg_models = {
+    regs = {
         "Linear": LinearRegression(),
         "Ridge": Ridge(),
         "Lasso": Lasso(),
@@ -339,33 +321,33 @@ with tab5:
     }
 
     reg_results, trained_r = [], {}
-    for name, reg in reg_models.items():
+    for name, reg in regs.items():
         pipe = Pipeline([("prep", pre_r), ("reg", reg)])
-        pipe.fit(Xtr_r, ytr_r)
-        y_pred = pipe.predict(Xte_r)
+        pipe.fit(Xtr, ytr)
+        y_pred = pipe.predict(Xte)
         trained_r[name] = pipe
 
-        # robust RMSE no matter the sklearn version
+        # RMSE compatible with any sklearn version
         try:
-            rmse_val = mean_squared_error(yte_r, y_pred, squared=False)
-        except TypeError:  # old sklearn fallback
-            rmse_val = np.sqrt(mean_squared_error(yte_r, y_pred))
+            rmse = mean_squared_error(yte, y_pred, squared=False)
+        except TypeError:
+            rmse = np.sqrt(mean_squared_error(yte, y_pred))
 
         reg_results.append({
             "Model": name,
-            "R2": r2_score(yte_r, y_pred).round(3),
-            "RMSE": round(rmse_val, 3)
+            "R2": r2_score(yte, y_pred).round(3),
+            "RMSE": round(rmse, 3)
         })
 
     st.subheader("Regression performance")
     st.dataframe(pd.DataFrame(reg_results))
 
-    # Residual plot
-    model_sel = st.selectbox("Model for residual plot", list(reg_models))
-    preds_full = trained_r[model_sel].predict(Xr)
+    # residual plot
+    mdl_plot = st.selectbox("Model for residual plot", list(regs))
+    preds = trained_r[mdl_plot].predict(Xr)
     fig, ax = plt.subplots()
-    ax.scatter(yr, preds_full, alpha=0.3)
+    ax.scatter(yr, preds, alpha=0.3)
     ax.plot([yr.min(), yr.max()], [yr.min(), yr.max()], "--", color="red")
     ax.set_xlabel("Actual"); ax.set_ylabel("Predicted")
-    ax.set_title(f"Actual vs Predicted – {model_sel}")
+    ax.set_title(f"Actual vs Predicted — {mdl_plot}")
     st.pyplot(fig)
