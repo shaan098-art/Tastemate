@@ -1,9 +1,8 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # apps.py – Streamlit dashboard for Cloud-Kitchen consumer data
-# All five tabs in a single file – deploy directly on Streamlit Cloud
+# One file, five tabs – deploy directly on Streamlit Cloud
 # ──────────────────────────────────────────────────────────────────────────────
-import io
-import base64
+import io, base64
 import numpy as np
 import pandas as pd
 import streamlit as st
@@ -28,11 +27,11 @@ from mlxtend.frequent_patterns import apriori, association_rules
 st.set_page_config(page_title="Cloud Kitchen Analytics", layout="wide")
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Helper functions
+# Helpers
 # ═════════════════════════════════════════════════════════════════════════════
 @st.cache_data
-def load_data(csv_path):
-    return pd.read_csv(csv_path)
+def load_data(path):
+    return pd.read_csv(path)
 
 def download_link(df, filename, text):
     csv = df.to_csv(index=False)
@@ -40,22 +39,21 @@ def download_link(df, filename, text):
     return f'<a href="data:file/csv;base64,{b64}" download="{filename}">{text}</a>'
 
 def dense_onehot():
-    """Return OneHotEncoder that always outputs dense arrays, no matter the version."""
-    try:        # scikit-learn ≥1.2
+    try:
         return OneHotEncoder(handle_unknown="ignore", sparse_output=False)
-    except TypeError:                 # scikit-learn ≤1.1
+    except TypeError:
         return OneHotEncoder(handle_unknown="ignore", sparse=False)
 
 def prep_features(df, target, drop_multiselect=True):
     X = df.copy()
     y = X.pop(target)
-    if target == "subscribe_intent":          # binarise for classification
+    if target == "subscribe_intent":
         y = (y >= 4).astype(int)
 
     if drop_multiselect:
-        ms_cols = [c for c in X.columns
-                   if X[c].dtype == object and X[c].str.contains(",").any()]
-        X = X.drop(columns=ms_cols)
+        multi_cols = [c for c in X.columns
+                      if X[c].dtype == object and X[c].str.contains(",").any()]
+        X = X.drop(columns=multi_cols)
 
     num_cols = X.select_dtypes(include=["int64", "float64"]).columns.tolist()
     cat_cols = [c for c in X.columns if c not in num_cols]
@@ -178,7 +176,7 @@ with tab2:
     }
 
     results, trained = [], {}
-    y_true = np.asarray(yte).ravel().astype(int)   # ensure clean 1-D int array
+    y_true = np.asarray(yte).ravel().astype(int)
 
     for name, mdl in models.items():
         pipe = Pipeline([("prep", pre), ("clf", mdl)])
@@ -192,10 +190,10 @@ with tab2:
 
         results.append({
             "Algorithm": name,
-            "Accuracy":  accuracy_score(y_true, y_pred).round(3),
-            "Precision": precision_score(y_true, y_pred).round(3),
-            "Recall":    recall_score(y_true, y_pred).round(3),
-            "F1":        f1_score(y_true, y_pred).round(3)
+            "Accuracy":  round(accuracy_score(y_true, y_pred), 3),
+            "Precision": round(precision_score(y_true, y_pred, zero_division=0), 3),
+            "Recall":    round(recall_score(y_true, y_pred, zero_division=0), 3),
+            "F1":        round(f1_score(y_true, y_pred, zero_division=0), 3)
         })
 
     st.subheader("Performance Summary")
@@ -332,18 +330,11 @@ with tab5:
 
         reg_results.append({
             "Model": name,
-            "R2": r2_score(yte, y_pred).round(3),
+            "R2":  round(r2_score(yte, y_pred), 3),
             "RMSE": round(rmse, 3)
         })
 
     st.subheader("Regression performance")
     st.dataframe(pd.DataFrame(reg_results))
 
-    mdl_plot = st.selectbox("Model for residual plot", list(regs))
-    preds = trained_r[mdl_plot].predict(Xr)
-    fig, ax = plt.subplots()
-    ax.scatter(yr, preds, alpha=0.3)
-    ax.plot([yr.min(), yr.max()], [yr.min(), yr.max()], "--", color="red")
-    ax.set_xlabel("Actual"); ax.set_ylabel("Predicted")
-    ax.set_title(f"Actual vs Predicted — {mdl_plot}")
-    st.pyplot(fig)
+    mdl_plot = st.selectbox("Model for residual plot", list_
